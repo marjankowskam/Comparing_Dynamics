@@ -1,5 +1,6 @@
 matplotlib
 openpyxl
+pandas
 numpy
 torch
 torchvision
