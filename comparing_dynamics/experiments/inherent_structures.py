@@ -157,11 +157,14 @@ def run_inherent_structure(
     model: Optional[torch.nn.Module] = None,
     save_dir: Optional[str | Path] = None,
     run_name: Optional[str] = None,
+    initial_parameters: Optional[torch.Tensor] = None,
 ) -> Dict[str, Any]:
     """Run one trajectory and return final metrics plus state snapshots.
 
     ``equilibrated_parameters`` is the state used as the initial condition for
-    the quench. ``initial_parameters`` is the state before Langevin dynamics.
+    the quench. ``initial_parameters`` is the state before Langevin dynamics,
+    or an explicitly supplied original initialization when ``model`` is a
+    checkpoint loaded from a previous run.
     The reported ``overlap_q`` answers the quench-memory question by comparing
     the inherent structure to the equilibrated state.
     """
@@ -186,7 +189,12 @@ def run_inherent_structure(
     full_data = task.get_full_data()
     loss_weights = task.initial_loss_weights()
 
-    initial_parameters = _parameters_to_vector(model)
+    if initial_parameters is None:
+        initial_parameters = _parameters_to_vector(model)
+    else:
+        initial_parameters = initial_parameters.detach().clone().to(device)
+        if initial_parameters.numel() != sum(parameter.numel() for parameter in model.parameters()):
+            raise ValueError("initial_parameters does not match the model parameter count")
     n_examples = len(full_data[0]) if isinstance(full_data, (tuple, list)) else 1
 
     langevin_params = _optimizer_params(
