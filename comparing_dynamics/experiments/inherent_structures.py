@@ -30,6 +30,7 @@ class InherentStructureConfig:
     quench_optimizer_params: Optional[Dict[str, Any]] = None
     seed: Optional[int] = None
     quench_tolerance: float = 0.0
+    wandb_log_every: int = 0
 
 
 def _parameters_to_vector(model: torch.nn.Module) -> torch.Tensor:
@@ -38,6 +39,16 @@ def _parameters_to_vector(model: torch.nn.Module) -> torch.Tensor:
 
 def _optimizer_params(params: Optional[Dict[str, Any]], learning_rate: float) -> Dict[str, Any]:
     return dict(params) if params is not None else {"lr": learning_rate}
+
+
+def _wandb_log(metrics: Dict[str, Any], step: int) -> None:
+    try:
+        import wandb
+
+        if wandb.run is not None:
+            wandb.log(metrics, step=step)
+    except ImportError:
+        pass
 
 
 def _resolve_run_name(run_name: Optional[str]) -> str:
@@ -104,10 +115,17 @@ def _langevin_step(
     temperature: float,
     weights: Dict[str, float],
     n_examples: int,
-) -> float:
+) -> tuple[float, float]:
     optimizer.zero_grad(set_to_none=True)
     loss = _full_batch_loss(model, task, data, weights)
     loss.backward()
+    gradient_norm = torch.linalg.vector_norm(
+        torch.cat([
+            parameter.grad.detach().reshape(-1)
+            for parameter in model.parameters()
+            if parameter.grad is not None
+        ])
+    )
     optimizer.step()
 
     if len(optimizer.param_groups) != 1:
@@ -117,7 +135,7 @@ def _langevin_step(
     with torch.no_grad():
         for parameter in model.parameters():
             parameter.add_(torch.randn_like(parameter) * noise_scale)
-    return float(loss.detach().cpu())
+    return float(loss.detach().cpu()), float(gradient_norm.cpu())
 
 
 def _gd_step(
@@ -173,6 +191,8 @@ def run_inherent_structure(
         raise ValueError("temperature must be non-negative")
     if experiment_cfg.equilibration_steps < 0 or experiment_cfg.quench_steps < 0:
         raise ValueError("step counts must be non-negative")
+    if experiment_cfg.wandb_log_every < 0:
+        raise ValueError("wandb_log_every must be non-negative")
     if experiment_cfg.seed is not None:
         set_random_seed(experiment_cfg.seed)
 
@@ -212,8 +232,8 @@ def run_inherent_structure(
         langevin_params,
         model.parameters(),
     )
-    for _ in range(experiment_cfg.equilibration_steps):
-        _langevin_step(
+    for step in range(experiment_cfg.equilibration_steps):
+        loss, gradient_norm = _langevin_step(
             model,
             task,
             full_data,
@@ -222,6 +242,18 @@ def run_inherent_structure(
             loss_weights,
             n_examples,
         )
+        if (
+            experiment_cfg.wandb_log_every > 0
+            and (step + 1) % experiment_cfg.wandb_log_every == 0
+        ):
+            _wandb_log(
+                {
+                    "langevin/loss": loss,
+                    "langevin/gradient_norm": gradient_norm,
+                    "phase_step": step + 1,
+                },
+                step=step + 1,
+            )
 
     equilibrated_parameters = _parameters_to_vector(model)
     equilibrated_model_state_dict = {
@@ -235,8 +267,20 @@ def run_inherent_structure(
     )
     final_loss = float("nan")
     final_gradient_norm = float("nan")
-    for _ in range(experiment_cfg.quench_steps):
+    for step in range(experiment_cfg.quench_steps):
         final_loss, final_gradient_norm = _gd_step(model, task, full_data, quench_optimizer, loss_weights)
+        if (
+            experiment_cfg.wandb_log_every > 0
+            and (step + 1) % experiment_cfg.wandb_log_every == 0
+        ):
+            _wandb_log(
+                {
+                    "quench/loss": final_loss,
+                    "quench/gradient_norm": final_gradient_norm,
+                    "phase_step": step + 1,
+                },
+                step=experiment_cfg.equilibration_steps + step + 1,
+            )
         if (
             experiment_cfg.quench_tolerance > 0
             and final_gradient_norm <= experiment_cfg.quench_tolerance
