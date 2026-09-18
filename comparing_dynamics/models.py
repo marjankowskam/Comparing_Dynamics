@@ -91,3 +91,5 @@ MODEL_OPTIONS = {
     "mnistMLP": MNISTMLP,
     "pinn": PINN,
 }
+
+#TODO CNN

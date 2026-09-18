@@ -1,4 +1,4 @@
-from tasks.base import Task
+from .base import Task
 import torch
 import torch.nn.functional as F
 import random

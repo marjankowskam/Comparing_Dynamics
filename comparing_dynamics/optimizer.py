@@ -3,13 +3,17 @@ import torch
 import torch.nn as nn
 from torch.optim import Adam, LBFGS, SGD
 
-from .opts.gd import GD
-from .opts.adam import Adam_
-from .opts.adam_lbfgs import Adam_LBFGS
-from .opts.adam_lbfgs_nncg import Adam_LBFGS_NNCG
-from .opts.adam_lbfgs_gd import Adam_LBFGS_GD
-from .opts.sam import SAM
-from .opts.adam_sam import Adam_SAM
+try:
+    from .opts.gd import GD
+    from .opts.adam import Adam_
+    from .opts.adam_lbfgs import Adam_LBFGS
+    from .opts.adam_lbfgs_nncg import Adam_LBFGS_NNCG
+    from .opts.adam_lbfgs_gd import Adam_LBFGS_GD
+    from .opts.sam import SAM
+    from .opts.adam_sam import Adam_SAM
+except ModuleNotFoundError:
+    GD = Adam_ = Adam_LBFGS = Adam_LBFGS_NNCG = None
+    Adam_LBFGS_GD = SAM = Adam_SAM = None
 import random
 import re
 import wandb
@@ -26,13 +30,13 @@ OUTPUT:
 """
 def get_opt(opt_name, opt_params_dict, model_params):
     opt_params_list = [item for kv in opt_params_dict.items() for item in (kv[0], str(kv[1]))] #converting dictionary into a flat list of strings
-    if opt_name == "lbfgs":
-        opt_params_list = ["history_size", str(cfg.opt_params['lbfgs_history_size'])]
     opt_params = get_opt_params(opt_params_list)
 
     if opt_name == 'adam':
-        return Adam_(model_params, **opt_params_dict)
+        return Adam(model_params, **opt_params_dict)
     elif opt_name == "gd":
+        if GD is None:
+            raise RuntimeError("The custom GD optimizer is not available in this checkout.")
         return GD(model_params, **opt_params)
     elif opt_name == 'sgd':
         return SGD(model_params, **opt_params)
@@ -41,6 +45,8 @@ def get_opt(opt_name, opt_params_dict, model_params):
             opt_params["history_size"] = int(opt_params["history_size"])
         return LBFGS(model_params, **opt_params, line_search_fn='strong_wolfe')
     elif opt_name == 'adam_lbfgs':
+        if Adam_LBFGS is None:
+            raise RuntimeError("The custom Adam_LBFGS optimizer is not available in this checkout.")
         if "switch_epochs" not in opt_params:
             raise KeyError("switch_epochs is not specified for Adam_LBFGS optimizer.")
         switch_epochs = opt_params["switch_epochs"]
@@ -63,6 +69,8 @@ def get_opt(opt_name, opt_params_dict, model_params):
 
         return Adam_LBFGS(model_params, switch_epochs, adam_params, lbfgs_params)
     elif opt_name == 'adam_lbfgs_nncg':
+        if Adam_LBFGS_NNCG is None:
+            raise RuntimeError("The custom Adam_LBFGS_NNCG optimizer is not available in this checkout.")
         if "switch_epoch_lbfgs" not in opt_params:
             raise KeyError("switch_epoch_lbfgs is not specified for Adam_LBFGS_NNCG optimizer.")
         if "switch_epoch_nncg" not in opt_params:
@@ -92,6 +100,8 @@ def get_opt(opt_name, opt_params_dict, model_params):
 
         return Adam_LBFGS_NNCG(model_params, switch_epoch_lbfgs, switch_epoch_nncg, precond_update_freq, adam_params, lbfgs_params, nncg_params)
     elif opt_name == 'adam_lbfgs_gd':
+        if Adam_LBFGS_GD is None:
+            raise RuntimeError("The custom Adam_LBFGS_GD optimizer is not available in this checkout.")
         if "switch_epoch_lbfgs" not in opt_params:
             raise KeyError("switch_epoch_lbfgs is not specified for Adam_LBFGS_GD optimizer.")
         if "switch_epoch_gd" not in opt_params:
@@ -114,6 +124,8 @@ def get_opt(opt_name, opt_params_dict, model_params):
 
         return Adam_LBFGS_GD(model_params, switch_epoch_lbfgs, switch_epoch_gd, adam_params, lbfgs_params, gd_params)
     elif opt_name == 'sam':
+        if SAM is None:
+            raise RuntimeError("The custom SAM optimizer is not available in this checkout.")
         opt_params = opt_params_dict.copy()
 
         OPTIMIZER_MAP = {
@@ -127,6 +139,8 @@ def get_opt(opt_name, opt_params_dict, model_params):
         return SAM(model_params, base_optimizer, **opt_params)
         
     elif opt_name == 'adam_sam':
+        if Adam_SAM is None:
+            raise RuntimeError("The custom Adam_SAM optimizer is not available in this checkout.")
         if "switch_epochs" not in opt_params:
             raise KeyError("switch_epochs is not specified for Adam_LBFGS optimizer.")
         switch_epochs = opt_params["switch_epochs"]
