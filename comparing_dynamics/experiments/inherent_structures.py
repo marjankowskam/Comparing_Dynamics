@@ -176,6 +176,8 @@ def run_inherent_structure(
     save_dir: Optional[str | Path] = None,
     run_name: Optional[str] = None,
     initial_parameters: Optional[torch.Tensor] = None,
+    metrics: tuple[str, ...] = (),
+    displacement_every: int = 1000,
 ) -> Dict[str, Any]:
     """Run one trajectory and return final metrics plus state snapshots.
 
@@ -217,6 +219,12 @@ def run_inherent_structure(
             raise ValueError("initial_parameters does not match the model parameter count")
     n_examples = len(full_data[0]) if isinstance(full_data, (tuple, list)) else 1
 
+    record_displacement = "displacement" in metrics
+    langevin_displacement = []
+    quench_displacement = []
+
+    langevin_start = _parameters_to_vector(model)
+
     langevin_params = _optimizer_params(
         experiment_cfg.langevin_optimizer_params,
         experiment_cfg.langevin_lr,
@@ -242,6 +250,10 @@ def run_inherent_structure(
             loss_weights,
             n_examples,
         )
+        if record_displacement and (step + 1) % displacement_every == 0:
+            w = _parameters_to_vector(model)
+            delta = torch.mean((w - langevin_start) ** 2).item()
+            langevin_displacement.append((step + 1, delta))
         if (
             experiment_cfg.wandb_log_every > 0
             and (step + 1) % experiment_cfg.wandb_log_every == 0
@@ -267,8 +279,13 @@ def run_inherent_structure(
     )
     final_loss = float("nan")
     final_gradient_norm = float("nan")
+    quench_start = _parameters_to_vector(model)
     for step in range(experiment_cfg.quench_steps):
         final_loss, final_gradient_norm = _gd_step(model, task, full_data, quench_optimizer, loss_weights)
+        if record_displacement and (step + 1) % displacement_every == 0:
+            w = _parameters_to_vector(model)
+            delta = torch.mean((w - quench_start) ** 2).item()
+            quench_displacement.append((step + 1, delta))
         if (
             experiment_cfg.wandb_log_every > 0
             and (step + 1) % experiment_cfg.wandb_log_every == 0
@@ -305,6 +322,11 @@ def run_inherent_structure(
         "equilibrated_model_state_dict": equilibrated_model_state_dict,
         "model_state_dict": {key: value.detach().cpu() for key, value in model.state_dict().items()},
     }
+    if record_displacement:
+        result["displacement"] = {
+            "langevin": langevin_displacement,
+            "quench": quench_displacement,
+        }
     if save_dir is not None:
         result["saved_files"] = _save_named_checkpoints(result, save_dir, run_name)
     return result
