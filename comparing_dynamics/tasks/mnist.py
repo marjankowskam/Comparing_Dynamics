@@ -85,7 +85,6 @@ class MNISTTask(Task):
     def get_data(self):
         return next(self.train_data_gen)
          
-
     def get_test_data(self):
         return (self.test_images, self.test_targets)
 

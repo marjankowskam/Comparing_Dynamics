@@ -3,17 +3,18 @@ import torch
 import torch.nn as nn
 from torch.optim import Adam, LBFGS, SGD
 
-try:
-    from .opts.gd import GD
-    from .opts.adam import Adam_
-    from .opts.adam_lbfgs import Adam_LBFGS
-    from .opts.adam_lbfgs_nncg import Adam_LBFGS_NNCG
-    from .opts.adam_lbfgs_gd import Adam_LBFGS_GD
-    from .opts.sam import SAM
-    from .opts.adam_sam import Adam_SAM
-except ModuleNotFoundError:
-    GD = Adam_ = Adam_LBFGS = Adam_LBFGS_NNCG = None
-    Adam_LBFGS_GD = SAM = Adam_SAM = None
+# My hand-written optimziers
+# try:
+#     from .opts.gd import GD
+#     from .opts.adam import Adam_
+#     from .opts.adam_lbfgs import Adam_LBFGS
+#     from .opts.adam_lbfgs_nncg import Adam_LBFGS_NNCG
+#     from .opts.adam_lbfgs_gd import Adam_LBFGS_GD
+#     from .opts.sam import SAM
+#     from .opts.adam_sam import Adam_SAM
+# except ModuleNotFoundError:
+#     GD = Adam_ = Adam_LBFGS = Adam_LBFGS_NNCG = None
+#     Adam_LBFGS_GD = SAM = Adam_SAM = None
 import random
 import re
 import wandb
@@ -28,101 +29,23 @@ INPUT:
 OUTPUT: 
 - opt: torch.optim.Optimizer instance
 """
-def get_opt(opt_name, opt_params_dict, model_params):
+def get_opt(opt_name, opt_params_dict, model_params, n_examples=None):
     opt_params_list = [item for kv in opt_params_dict.items() for item in (kv[0], str(kv[1]))] #converting dictionary into a flat list of strings
     opt_params = get_opt_params(opt_params_list)
 
     if opt_name == 'adam':
         return Adam(model_params, **opt_params_dict)
     elif opt_name == "gd":
-        if GD is None:
-            raise RuntimeError("The custom GD optimizer is not available in this checkout.")
-        return GD(model_params, **opt_params)
+        # if GD is None:
+        #     raise RuntimeError("The custom GD optimizer is not available in this checkout.")
+        # make sure full batch data is passed here!!!
+        return SGD(model_params, **opt_params)
     elif opt_name == 'sgd':
         return SGD(model_params, **opt_params)
     elif opt_name == 'lbfgs':
         if "history_size" in opt_params:
             opt_params["history_size"] = int(opt_params["history_size"])
         return LBFGS(model_params, **opt_params, line_search_fn='strong_wolfe')
-    elif opt_name == 'adam_lbfgs':
-        if Adam_LBFGS is None:
-            raise RuntimeError("The custom Adam_LBFGS optimizer is not available in this checkout.")
-        if "switch_epochs" not in opt_params:
-            raise KeyError("switch_epochs is not specified for Adam_LBFGS optimizer.")
-        switch_epochs = opt_params["switch_epochs"]
-
-        # Ensure switch_epochs is a list of integers
-        if not isinstance(switch_epochs, list):
-            switch_epochs = [switch_epochs]
-        switch_epochs = [int(epoch) for epoch in switch_epochs]
-
-        # Get parameters for Adam and LBFGS, remove the prefix "adam_" and "lbfgs_" from the keys
-        adam_params = {k[5:]: v for k, v in opt_params.items() if k.startswith("adam_")}
-        lbfgs_params = {k[6:]: v for k, v in opt_params.items() if k.startswith("lbfgs_")}
-        lbfgs_params["line_search_fn"] = "strong_wolfe"
-        
-        # If max_iter or history_size is specified, convert them to integers
-        if "max_iter" in lbfgs_params:
-            lbfgs_params["max_iter"] = int(lbfgs_params["max_iter"])
-        if "history_size" in lbfgs_params:
-            lbfgs_params["history_size"] = int(lbfgs_params["history_size"])
-
-        return Adam_LBFGS(model_params, switch_epochs, adam_params, lbfgs_params)
-    elif opt_name == 'adam_lbfgs_nncg':
-        if Adam_LBFGS_NNCG is None:
-            raise RuntimeError("The custom Adam_LBFGS_NNCG optimizer is not available in this checkout.")
-        if "switch_epoch_lbfgs" not in opt_params:
-            raise KeyError("switch_epoch_lbfgs is not specified for Adam_LBFGS_NNCG optimizer.")
-        if "switch_epoch_nncg" not in opt_params:
-            raise KeyError("switch_epoch_nncg is not specified for Adam_LBFGS_NNCG optimizer.")
-        if "precond_update_freq" not in opt_params:
-            raise KeyError("precond_update_freq is not specified for Adam_LBFGS_NNCG optimizer.")
-        switch_epoch_lbfgs = int(opt_params["switch_epoch_lbfgs"])
-        switch_epoch_nncg = int(opt_params["switch_epoch_nncg"])
-        precond_update_freq = int(opt_params["precond_update_freq"])
-
-        # Get parameters for Adam, LBFGS, and NNCG, remove the prefix "adam_", "lbfgs_", and "nncg_" from the keys
-        adam_params = {k[5:]: v for k, v in opt_params.items() if k.startswith("adam_")}
-        lbfgs_params = {k[6:]: v for k, v in opt_params.items() if k.startswith("lbfgs_")}
-        nncg_params = {k[5:]: v for k, v in opt_params.items() if k.startswith("nncg_")}
-        lbfgs_params["line_search_fn"] = "strong_wolfe"
-        nncg_params["line_search_fn"] = "armijo"
-
-        nncg_params["verbose"] = True
-
-        # If max_iter or history_size is specified, convert them to integers
-        if "max_iter" in lbfgs_params:
-            lbfgs_params["max_iter"] = int(lbfgs_params["max_iter"])
-        if "history_size" in lbfgs_params:
-            lbfgs_params["history_size"] = int(lbfgs_params["history_size"])
-        if "rank" in nncg_params:
-            nncg_params["rank"] = int(nncg_params["rank"])
-
-        return Adam_LBFGS_NNCG(model_params, switch_epoch_lbfgs, switch_epoch_nncg, precond_update_freq, adam_params, lbfgs_params, nncg_params)
-    elif opt_name == 'adam_lbfgs_gd':
-        if Adam_LBFGS_GD is None:
-            raise RuntimeError("The custom Adam_LBFGS_GD optimizer is not available in this checkout.")
-        if "switch_epoch_lbfgs" not in opt_params:
-            raise KeyError("switch_epoch_lbfgs is not specified for Adam_LBFGS_GD optimizer.")
-        if "switch_epoch_gd" not in opt_params:
-            raise KeyError("switch_epoch_gd is not specified for Adam_LBFGS_GD optimizer.")
-        switch_epoch_lbfgs = int(opt_params["switch_epoch_lbfgs"])
-        switch_epoch_gd = int(opt_params["switch_epoch_gd"])
-
-        # Get parameters for Adam, LBFGS, and GD, remove the prefix "adam_", "lbfgs_", and "gd_" from the keys
-        adam_params = {k[5:]: v for k, v in opt_params.items() if k.startswith("adam_")}
-        lbfgs_params = {k[6:]: v for k, v in opt_params.items() if k.startswith("lbfgs_")}
-        gd_params = {k[3:]: v for k, v in opt_params.items() if k.startswith("gd_")}
-        lbfgs_params["line_search_fn"] = "strong_wolfe"
-        gd_params["line_search_fn"] = "armijo"
-
-        # If max_iter or history_size is specified, convert them to integers
-        if "max_iter" in lbfgs_params:
-            lbfgs_params["max_iter"] = int(lbfgs_params["max_iter"])
-        if "history_size" in lbfgs_params:
-            lbfgs_params["history_size"] = int(lbfgs_params["history_size"])
-
-        return Adam_LBFGS_GD(model_params, switch_epoch_lbfgs, switch_epoch_gd, adam_params, lbfgs_params, gd_params)
     elif opt_name == 'sam':
         if SAM is None:
             raise RuntimeError("The custom SAM optimizer is not available in this checkout.")
@@ -154,6 +77,8 @@ def get_opt(opt_name, opt_params_dict, model_params):
         adam_params = {k[5:]: v for k, v in opt_params.items() if k.startswith("adam_")}
 
         return Adam_SAM(model_params, switch_epochs, adam_params)
+    elif opt_name == "langevin":
+        return Langevin(model_params, **opt_params_dict)
     else:
         raise ValueError(f'Optimizer {opt_name} not supported')
 
@@ -205,3 +130,35 @@ OUTPUT:
 def get_opt_params(opt_params_list): 
     return parse_params_list(opt_params_list)
 
+
+""" self-mplemented optimizer for Langevin dynamics """
+class Langevin(torch.optim.Optimizer):
+    def __init__(self, params, lr=1e-3, temperature=1.0, n_examples=1):
+        defaults = dict(
+            lr=lr,
+            temperature=temperature,
+            n_examples=n_examples,
+        )
+        super().__init__(params, defaults)
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        loss = closure() if closure is not None else None
+
+        for group in self.param_groups:
+            lr = group["lr"]
+            T = group["temperature"]
+            N = group["n_examples"]
+
+            noise_scale = (2.0 * lr * T / N) ** 0.5
+
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+
+                p.add_(p.grad, alpha=-lr)
+
+                if T > 0:
+                    p.add_(torch.randn_like(p) * noise_scale)
+
+        return loss
