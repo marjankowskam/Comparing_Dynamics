@@ -20,10 +20,11 @@ class InherentStructureConfig:
     optimizer can be any optimizer supported by the optimizer catalog.
     """
     equilibration_steps: int
+    quench_steps: int
+
     equilibration_optimizer_name: str = "langevin"
     equilibration_optimizer_params: Optional[Dict[str, Any]] = None
 
-    quench_steps: int
     quench_optimizer_name: str = "sgd"
     quench_optimizer_params: Optional[Dict[str, Any]] = None
     quench_tolerance: float = 0.0
