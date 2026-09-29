@@ -257,7 +257,7 @@ def run_inherent_structure(
         final_loss = float(_full_batch_loss(model, task, full_data, loss_weights).cpu())
 
     result = {
-        "temperature": get_temperature(cfg, experiement_cfg),
+        "temperature": get_temperature(cfg, experiment_cfg),
         "equilibration_steps": experiment_cfg.equilibration_steps,
         "quench_steps_requested": experiment_cfg.quench_steps,
         "final_loss": final_loss,
