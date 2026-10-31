@@ -7,13 +7,14 @@ from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, TensorDataset
 
 class MNISTTask(Task):
-    def __init__(self, batch_size, device, data_dir="/data/", random_baseline = False):
+    def __init__(self, batch_size, device, data_dir="/data/", random_baseline=False, weight_decay=0.0):
         """
         batch_size: size for mini abtching (if batch_size is None - full dataset learning)
         random_baseline: shuffles pixels and labels to test for impact of data structure on hessian structure
         """
         super().__init__(device)
 
+        self.weight_decay = weight_decay
         self.batch_size = batch_size
         # Dataset
         transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
@@ -100,17 +101,18 @@ class MNISTTask(Task):
         return {"CrossEnt": loss}
 
     def balanced_loss_fn(self, data, y, weights, reduction='mean'):
-        loss_dict = self.loss_func(data, y, reduction=reduction)
-        return loss_dict["CrossEnt"]
+        loss = self.loss_func(data, y, reduction=reduction)["CrossEnt"]
+        if self.weight_decay:
+            loss = loss + 0.5 * self.weight_decay * sum(p.square().sum() for p in self.model.parameters())
+        return loss
 
     def balanced_loss_fn_stateless(self, params_tuple, weights):
-        param_dict = {name: p for name, p in zip(self.param_names, params_tuple)}
-
+        param_dict = dict(zip(self.param_names, params_tuple))
         images, targets = self.get_data()
-
         logits = functional_call(self.model, param_dict, (images,))
         loss = F.cross_entropy(logits, targets)
-
+        if self.weight_decay:
+            loss = loss + 0.5 * self.weight_decay * sum(p.square().sum() for p in params_tuple)
         return loss
 
     def initial_loss_weights(self):
