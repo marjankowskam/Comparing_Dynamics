@@ -2,14 +2,11 @@
 
 Uses the existing Comparing_Dynamics model/task implementations and original
 quench cache identity. Does not discover new runs: input rows come from Excel.
-
-It provides two main functions:
-- quench_state_dict_gd() — performs the original 40,000-step quench.
-- load_or_run_quench() — reuses a matching saved quench, checks the parent identity, or computes one if missing.
 """
 
 import hashlib
 import json
+import copy
 from pathlib import Path
 
 import torch
@@ -193,6 +190,9 @@ def load_or_run_quench(row, *, checkpoint_dir, quench_dir, eval_data, eval_indic
     quench_dir = Path(quench_dir)
     parent_state = get_model_state(torch_load(row.parent_path))
     cfg = load_run_config(row.run_id, checkpoint_dir)
+    if str(cfg.task_name).lower().replace('-', '_') in ('underparametrized_mnist', 'mnist_underparametrized'):
+        cfg = copy.deepcopy(cfg)
+        cfg.task_name = 'mnist'  # Architecture is already specified by cfg.model_params.
     identity = dict(
         parent_hash=state_hash(parent_state),
         config=stable_signature(vars(cfg)),
@@ -211,38 +211,49 @@ def load_or_run_quench(row, *, checkpoint_dir, quench_dir, eval_data, eval_indic
         return q, path, 'cached'
 
     if allow_legacy:
-        legacy = [quench_dir / f'{stem}.pt']
+        # Original InfTemp quench files can live next to the parent models.
+        legacy = [quench_dir / f'{stem}.pt', Path(checkpoint_dir) / f'{stem}.pt']
         if analysis_dir is not None:
             legacy.append(Path(analysis_dir) / 'relaxation_mock_trial' /
                           f'{safe_filename(row.run_id)}_lr{quench_lr:g}_steps{max_steps}.pt')
-        for old_path in legacy:
+        for old_path in dict.fromkeys(legacy):
             if not old_path.is_file():
                 continue
             q = canonical_result(torch_load(old_path))
-            if not {0, max_steps}.issubset(q['states']):
+            if {0, max_steps} - set(q['states']):
                 continue
-            if 'parent_parameters' in q:
+            if int(q.get('steps', max_steps)) != max_steps or float(q.get('quench_lr', quench_lr)) != quench_lr:
+                continue
+            initial = q['states'][0]
+            # Verify the *actual initial weights* for InfTemp's saved format.
+            if 'model_state_dict' in initial:
+                matches = state_hash(get_model_state(initial)) == identity['parent_hash']
+            elif (q.get('cache_identity') or {}).get('parent_hash') is not None:
+                matches = q['cache_identity']['parent_hash'] == identity['parent_hash']
+            elif q.get('parent_hash') is not None:
+                matches = q['parent_hash'] == identity['parent_hash']
+            elif 'parent_parameters' in q:
                 model = build_model_from_state(parent_state, cfg, device)
                 matches = torch.equal(parameters_to_vector(model).cpu(), q['parent_parameters'].cpu())
                 del model
-                if not matches:
-                    continue
-            model = build_model_from_state(parent_state, cfg, device)
-            task = build_task_for_model(model, cfg, device)
-            current = extract_representations_from_model(model, task, eval_data)
-            del model, task
-            saved = q['states'][0]['representations']
-            matches = current.keys() == saved.keys() and all(
-                current[k].shape == saved[k].shape and
-                torch.allclose(current[k], saved[k], rtol=1e-5, atol=1e-6)
-                for k in current
-            )
+            elif 'representations' in initial:
+                model = build_model_from_state(parent_state, cfg, device)
+                task = build_task_for_model(model, cfg, device)
+                current = extract_representations_from_model(model, task, eval_data)
+                del model, task
+                saved = initial['representations']
+                matches = current.keys() == saved.keys() and all(
+                    current[k].shape == saved[k].shape and
+                    torch.allclose(current[k], saved[k], rtol=1e-5, atol=1e-6)
+                    for k in current)
+            else:
+                matches = False  # Never trust a filename alone.
             if not matches:
                 continue
-            q.update(cache_identity=identity, reused_from=str(old_path))
-            quench_dir.mkdir(parents=True, exist_ok=True)
-            torch.save(q, path)
-            return q, path, 'reused legacy'
+            # Normalise the returned object in memory; don't modify old checkpoints.
+            if 'model_state_dict' not in q and 'model_state_dict' in q['states'][max_steps]:
+                q['model_state_dict'] = q['states'][max_steps]['model_state_dict']
+            return q, old_path, 'reused legacy'
 
     if not run_missing:
         raise FileNotFoundError(f'No quench matches this exact parent and evaluation setup: {stem}')
@@ -252,7 +263,7 @@ def load_or_run_quench(row, *, checkpoint_dir, quench_dir, eval_data, eval_indic
     if hasattr(row, 'temperature'):
         q['temperature'] = float(row.temperature)
     else:
-        q['temperature'] = float(row.lr) / float(row.batch_size)
+        q['temperature'] = float('inf') if str(row.run_id).startswith('InfTemp_') else float(row.lr) / float(row.batch_size)
     quench_dir.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_suffix('.tmp')
     torch.save(q, temp_path)
