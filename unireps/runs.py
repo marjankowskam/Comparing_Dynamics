@@ -115,10 +115,11 @@ def find_quench(run_name, parent_path, quench_dir, steps=40000, quench_lr=None):
 def discover_runs(metadata_path, checkpoint_dir, quench_dir, *,
                   run_names=None, task=None, weight_decay=None,
                   use_extended=True, quench_steps=40000, quench_lr=None,
-                  verify_quenches=False):
+                  verify_quenches=False,  ignore_trivial=False):
     """Fast registry-based lookup. Only load checkpoint tensors if explicitly verifying quenches.
 
     Filter to the requested Excel runs BEFORE accessing Drive files.
+    Ignore_trivial excludes the runs that had accuracy 0.1 -- these ahve been added to the Unireps-TrivialRuns sheet 
     """
     registry = load_run_registry(metadata_path)
     if run_names is not None:
@@ -132,6 +133,13 @@ def discover_runs(metadata_path, checkpoint_dir, quench_dir, *,
     if weight_decay is not None:
         wd_col = pd.to_numeric(registry['weight_decay'], errors='coerce').fillna(0.0)
         registry = registry[(wd_col - float(weight_decay)).abs() < 1e-12]
+    if ignore_trivial:
+        trivial = pd.read_excel(metadata_path,sheet_name='Unireps-TrivialRuns',header=None, usecols=[0], )
+        trivial_names = set(trivial.iloc[:, 0].dropna().astype(str).str.strip())
+        exclude = registry['name'].astype(str).str.strip().isin(trivial_names)
+        print(f'Excluding {exclude.sum()} trivial runs.')
+        registry = registry.loc[~exclude].copy()
+        
     rows = []
     for row in registry.itertuples(index=False):
         run_name = row.name
